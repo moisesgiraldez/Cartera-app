@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Cartera</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0F1113;
+    --bg-elevated:#161A1D;
+    --bg-sunken:#0A0C0D;
+    --border:#24282D;
+    --border-soft:#1C2024;
+    --text:#EDEBE6;
+    --text-dim:#8B9099;
+    --text-faint:#565B62;
+    --gold:#C9A227;
+    --gain:#4FD1AE;
+    --loss:#E8735F;
+    --radius:14px;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; padding:0; background:var(--bg); color:var(--text);
+    font-family:'Inter',sans-serif; -webkit-font-smoothing:antialiased;
+    height:100%; overscroll-behavior-y:none;}
+  body{padding-bottom:100px;}
+  .mono{font-family:'IBM Plex Mono',monospace; font-variant-numeric:tabular-nums;}
+  .display{font-family:'Space Grotesk',sans-serif;}
+
+  header{padding:22px 20px 14px; position:sticky; top:0; background:var(--bg);
+    z-index:5; border-bottom:1px solid var(--border-soft);}
+  .eyebrow{font-size:11px; letter-spacing:.14em; color:var(--text-faint); text-transform:uppercase; font-weight:600;}
+  .top-row{display:flex; justify-content:space-between; align-items:flex-start; margin-top:4px;}
+  .total-value{font-size:34px; font-weight:600; letter-spacing:-0.02em;}
+  .refresh-btn{background:none; border:1px solid var(--border); color:var(--text-dim);
+    width:36px; height:36px; border-radius:10px; display:flex; align-items:center; justify-content:center;
+    cursor:pointer; margin-top:2px;}
+  .refresh-btn:active{background:var(--bg-elevated);}
+  .refresh-btn.spinning svg{animation:spin 0.8s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  .perf-row{display:flex; align-items:baseline; gap:8px; margin-top:6px;}
+  .perf-value{font-size:15px; font-weight:600;}
+  .perf-label{font-size:12px; color:var(--text-faint);}
+  .up{color:var(--gain);}
+  .down{color:var(--loss);}
+  .neutral{color:var(--text-dim);}
+
+  .tabs{display:flex; gap:6px; margin-top:16px; overflow-x:auto; padding-bottom:2px;}
+  .tab{flex:0 0 auto; padding:7px 13px; border-radius:20px; font-size:13px; font-weight:600;
+    color:var(--text-dim); background:var(--bg-elevated); border:1px solid var(--border-soft); cursor:pointer;}
+  .tab.active{color:#0F1113; background:var(--gold); border-color:var(--gold);}
+
+  section{padding:22px 20px 6px;}
+  .section-title{font-size:12px; letter-spacing:.1em; text-transform:uppercase; color:var(--text-faint);
+    font-weight:600; margin-bottom:14px;}
+
+  .empty{text-align:center; padding:60px 20px; color:var(--text-dim);}
+  .empty h3{color:var(--text); font-family:'Space Grotesk',sans-serif; font-weight:600; margin-bottom:6px;}
+  .empty p{font-size:14px; line-height:1.5;}
+
+  .weight-wrap{display:flex; gap:20px; align-items:center;}
+  .donut-holder{position:relative; width:120px; height:120px; flex:0 0 120px;}
+  .legend{flex:1; display:flex; flex-direction:column; gap:10px;}
+  .legend-row{display:flex; align-items:center; gap:8px; font-size:13px;}
+  .legend-dot{width:8px; height:8px; border-radius:50%; flex:0 0 8px;}
+  .legend-name{flex:1; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .legend-pct{color:var(--text-dim); font-size:12.5px;}
+
+  .holding{background:var(--bg-elevated); border:1px solid var(--border-soft); border-radius:var(--radius);
+    padding:14px 16px; margin-bottom:10px; cursor:pointer; position:relative; overflow:hidden;}
+  .holding:active{background:#1B1F23;}
+  .h-top{display:flex; justify-content:space-between; align-items:baseline;}
+  .h-ticker{font-weight:600; font-size:15px;}
+  .h-name{font-size:12px; color:var(--text-faint); margin-top:1px;}
+  .h-value{font-size:15px; font-weight:600;}
+  .h-sub{display:flex; justify-content:space-between; margin-top:8px; font-size:12.5px;}
+  .h-qty{color:var(--text-dim);}
+  .h-weightbar{position:absolute; bottom:0; left:0; height:2px; background:linear-gradient(90deg, var(--gold), var(--gain));}
+  .manual-tag{font-size:9.5px; color:var(--text-faint); border:1px solid var(--border); border-radius:5px;
+    padding:1px 5px; margin-left:6px; letter-spacing:.03em;}
+
+  .fab{position:fixed; bottom:26px; right:20px; width:56px; height:56px; border-radius:50%;
+    background:var(--gold); color:#12141a; border:none; font-size:28px; font-weight:400;
+    display:flex; align-items:center; justify-content:center; box-shadow:0 8px 24px rgba(201,162,39,.35);
+    cursor:pointer; z-index:6;}
+  .fab:active{transform:scale(.94);}
+
+  .sheet-overlay{position:fixed; inset:0; background:rgba(0,0,0,.55); z-index:10; display:none;}
+  .sheet-overlay.open{display:block;}
+  .sheet{position:fixed; left:0; right:0; bottom:0; background:var(--bg-sunken); border-top:1px solid var(--border);
+    border-radius:20px 20px 0 0; z-index:11; transform:translateY(100%); transition:transform .25s ease;
+    max-height:88vh; overflow-y:auto; padding:10px 20px calc(28px + env(safe-area-inset-bottom));}
+  .sheet.open{transform:translateY(0);}
+  .sheet-handle{width:36px; height:4px; background:var(--border); border-radius:2px; margin:8px auto 16px;}
+  .sheet h2{font-family:'Space Grotesk',sans-serif; font-size:19px; margin:0 0 18px;}
+  .field{margin-bottom:14px;}
+  .field label{display:block; font-size:12px; color:var(--text-dim); margin-bottom:6px; font-weight:500;}
+  .field input, .field select{width:100%; background:var(--bg-elevated); border:1px solid var(--border);
+    color:var(--text); border-radius:10px; padding:12px 13px; font-size:15px; font-family:'Inter',sans-serif;}
+  .field input:focus, .field select:focus{outline:none; border-color:var(--gold);}
+  .row-2{display:flex; gap:10px;}
+  .row-2 .field{flex:1;}
+  .btn-primary{width:100%; background:var(--gold); color:#12141a; border:none; border-radius:12px;
+    padding:15px; font-size:15px; font-weight:600; cursor:pointer; margin-top:6px;}
+  .btn-primary:active{opacity:.85;}
+  .btn-danger{width:100%; background:none; color:var(--loss); border:1px solid rgba(232,115,95,.35);
+    border-radius:12px; padding:13px; font-size:14px; font-weight:600; cursor:pointer; margin-top:10px;}
+  .btn-ghost{width:100%; background:none; color:var(--text-dim); border:1px solid var(--border);
+    border-radius:12px; padding:13px; font-size:14px; font-weight:600; cursor:pointer; margin-top:10px;}
+  .helper{font-size:12px; color:var(--text-faint); margin-top:-6px; margin-bottom:14px; line-height:1.5;}
+  .status-msg{font-size:13px; padding:10px 12px; border-radius:10px; margin-bottom:14px; line-height:1.4;}
+  .status-msg.err{background:rgba(232,115,95,.1); color:var(--loss); border:1px solid rgba(232,115,95,.25);}
+  .status-msg.ok{background:rgba(79,209,174,.1); color:var(--gain); border:1px solid rgba(79,209,174,.25);}
+  .toast{position:fixed; bottom:100px; left:50%; transform:translateX(-50%); background:var(--bg-elevated);
+    border:1px solid var(--border); color:var(--text); padding:11px 18px; border-radius:30px; font-size:13px;
+    z-index:20; opacity:0; transition:opacity .25s; pointer-events:none;}
+  .toast.show{opacity:1;}
+  .privacy-note{font-size:11.5px; color:var(--text-faint); line-height:1.6; padding:16px 20px 6px;}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="eyebrow">Cartera · privado</div>
+  <div class="top-row">
+    <div>
+      <div class="total-value mono" id="totalValue">— €</div>
+      <div class="perf-row">
+        <span class="perf-value mono neutral" id="perfValue">—</span>
+        <span class="perf-label" id="perfLabel">selecciona horizonte</span>
+      </div>
+    </div>
+    <button class="refresh-btn" id="refreshBtn" title="Actualizar cotizaciones">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>
+    </button>
+  </div>
+  <div class="tabs" id="tabs"></div>
+</header>
+
+<section id="weightSection" style="display:none;">
+  <div class="section-title">Peso por activo</div>
+  <div class="weight-wrap">
+    <div class="donut-holder"><canvas id="donutChart"></canvas></div>
+    <div class="legend" id="legend"></div>
+  </div>
+</section>
+
+<section id="holdingsSection" style="display:none;">
+  <div class="section-title">Posiciones</div>
+  <div id="holdingsList"></div>
+</section>
+
+<div id="emptyState" class="empty">
+  <h3>Sin posiciones todavía</h3>
+  <p>Toca el botón + para añadir tu primer activo<br>(acción, ETF o fondo de inversión).</p>
+</div>
+
+<p class="privacy-note">Los datos de tu cartera se guardan solo en este dispositivo. Para cotizaciones se consulta Yahoo Finance (vía proxy CORS) y para tipos de cambio, Frankfurter (BCE) — solo se envía el ticker o divisa, nunca tu cartera.</p>
+
+<button class="fab" id="fabAdd">+</button>
+
+<div class="sheet-overlay" id="overlay"></div>
+<div class="sheet" id="addSheet">
+  <div class="sheet-handle"></div>
+  <h2 id="sheetTitle">Añadir posición</h2>
+  <div id="statusMsg"></div>
+  <form id="posForm">
+    <div class="field">
+      <label>Ticker (Yahoo Finance)</label>
+      <input type="text" id="f_ticker" placeholder="p. ej. AAPL, VWCE.DE, SAN.MC" autocapitalize="characters" required>
+    </div>
+    <div class="field">
+      <label>Nombre</label>
+      <input type="text" id="f_name" placeholder="p. ej. Apple Inc." required>
+    </div>
+    <div class="field">
+      <label>Tipo de activo</label>
+      <select id="f_type">
+        <option value="accion">Acción</option>
+        <option value="etf">ETF</option>
+        <option value="fondo">Fondo de inversión</option>
+      </select>
+    </div>
+    <div class="row-2">
+      <div class="field">
+        <label>Cantidad</label>
+        <input type="number" id="f_qty" step="any" placeholder="10" required>
+      </div>
+      <div class="field">
+        <label>Precio de compra</label>
+        <input type="number" id="f_price" step="any" placeholder="185.20" required>
+      </div>
+    </div>
+    <div class="row-2">
+      <div class="field">
+        <label>Divisa de compra</label>
+        <select id="f_ccy">
+          <option value="EUR">EUR</option>
+          <option value="USD">USD</option>
+          <option value="GBP">GBP</option>
+          <option value="CHF">CHF</option>
+          <option value="JPY">JPY</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Fecha de compra</label>
+        <input type="date" id="f_date" required>
+      </div>
+    </div>
+    <button type="submit" class="btn-primary" id="submitBtn">Buscar cotización y guardar</button>
+    <button type="button" class="btn-ghost" id="cancelBtn">Cancelar</button>
+    <button type="button" class="btn-danger" id="deleteBtn" style="display:none;">Eliminar posición</button>
+  </form>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+  'use strict';
+
+  const RANGES = [
+    {key:'1M', label:'1M', days:30},
+    {key:'3M', label:'3M', days:91},
+    {key:'6M', label:'6M', days:182},
+    {key:'1A', label:'1A', days:365},
+    {key:'5A', label:'5A', days:365*5},
+    {key:'YTD', label:'YTD', days:null}
+  ];
+  let activeRange = '6M';
+  let positions = [];
+  let priceCache = {}; // ticker -> {meta, series:[{t,close}], currency}
+  let fxCache = {}; // "USD_2024-01-01" -> rate to EUR
+
+  const $ = id => document.getElementById(id);
+  const fmtEUR = n => (isFinite(n)?n:0).toLocaleString('es-ES',{style:'currency',currency:'EUR',maximumFractionDigits:2});
+  const fmtPct = n => (n>=0?'+':'') + n.toFixed(2) + '%';
+  const todayISO = () => new Date().toISOString().slice(0,10);
+  const daysAgoISO = d => { const dt=new Date(); dt.setDate(dt.getDate()-d); return dt.toISOString().slice(0,10); };
+
+  function toast(msg){
+    const t = $('toast'); t.textContent = msg; t.classList.add('show');
+    setTimeout(()=>t.classList.remove('show'), 2200);
+  }
+
+  // ---------- Storage ----------
+  async function loadPositions(){
+    try{
+      const res = await window.storage.get('positions', false);
+      positions = res && res.value ? JSON.parse(res.value) : [];
+    }catch(e){ positions = []; }
+  }
+  async function savePositions(){
+    await window.storage.set('positions', JSON.stringify(positions), false);
+  }
+
+  // ---------- Data fetching ----------
+  async function fetchYahoo(ticker){
+    if(priceCache[ticker]) return priceCache[ticker];
+    const target = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=5y`;
+    const proxied = `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`;
+    const res = await fetch(proxied);
+    if(!res.ok) throw new Error('No se pudo consultar la cotización');
+    const data = await res.json();
+    const result = data && data.chart && data.chart.result && data.chart.result[0];
+    if(!result) throw new Error('Ticker no encontrado');
+    const ts = result.timestamp || [];
+    const closes = (result.indicators.quote[0] || {}).close || [];
+    const series = ts.map((t,i)=>({t:t*1000, close:closes[i]})).filter(p=>p.close!=null);
+    const obj = {
+      currency: result.meta.currency || 'USD',
+      currentPrice: result.meta.regularMarketPrice,
+      series
+    };
+    priceCache[ticker] = obj;
+    return obj;
+  }
+
+  function priceAtOrBefore(series, targetMs){
+    let chosen = null;
+    for(const p of series){ if(p.t <= targetMs) chosen = p; else break; }
+    return chosen ? chosen.close : (series[0] ? series[0].close : null);
+  }
+
+  async function fetchFX(ccy, dateISO){
+    if(ccy === 'EUR') return 1;
+    const key = ccy + '_' + dateISO;
+    if(fxCache[key]) return fxCache[key];
+    const isToday = dateISO === todayISO();
+    const path = isToday ? 'latest' : dateISO;
+    let rate = null;
+    for(const base of ['https://api.frankfurter.dev/v1/', 'https://api.frankfurter.app/']){
+      try{
+        const res = await fetch(`${base}${path}?base=${ccy}&symbols=EUR`);
+        if(!res.ok) continue;
+        const data = await res.json();
+        if(data && data.rates && data.rates.EUR){ rate = data.rates.EUR; break; }
+      }catch(e){ /* try next */ }
+    }
+    if(rate == null) rate = 1; // last-resort fallback so app doesn't crash
+    fxCache[key] = rate;
+    return rate;
+  }
+
+  // ---------- Valuation ----------
+  async function valueEURNow(pos){
+    if(pos.manualPrice != null){
+      const fx = await fetchFX(pos.currency, todayISO());
+      return pos.quantity * pos.manualPrice * fx;
+    }
+    const q = await fetchYahoo(pos.ticker);
+    const fx = await fetchFX(q.currency, todayISO());
+    return pos.quantity * q.currentPrice * fx;
+  }
+
+  async function valueEURAt(pos, dateISO){
+    const dateMs = new Date(dateISO+'T12:00:00Z').getTime();
+    const purchaseMs = new Date(pos.purchaseDate+'T12:00:00Z').getTime();
+    if(dateMs < purchaseMs){
+      // not held yet at that point in time
+      return null;
+    }
+    if(pos.manualPrice != null){
+      // linear interpolation between purchase price and last manual price as an approximation
+      const lastUpdMs = pos.manualUpdated ? new Date(pos.manualUpdated+'T12:00:00Z').getTime() : Date.now();
+      const span = Math.max(lastUpdMs - purchaseMs, 1);
+      const frac = Math.min(Math.max((dateMs - purchaseMs)/span, 0), 1);
+      const price = pos.purchasePrice + (pos.manualPrice - pos.purchasePrice)*frac;
+      const fx = await fetchFX(pos.currency, dateISO);
+      return pos.quantity * price * fx;
+    }
+    const q = await fetchYahoo(pos.ticker);
+    const price = priceAtOrBefore(q.series, dateMs) || q.currentPrice;
+    const fx = await fetchFX(q.currency, dateISO);
+    return pos.quantity * price * fx;
+  }
+
+  function rangeStartDate(rangeKey){
+    if(rangeKey === 'YTD'){
+      const y = new Date().getFullYear();
+      return `${y}-01-01`;
+    }
+    const def = RANGES.find(r=>r.key===rangeKey);
+    return daysAgoISO(def.days);
+  }
+
+  // ---------- Rendering ----------
+  function renderTabs(){
+    const wrap = $('tabs'); wrap.innerHTML = '';
+    RANGES.forEach(r=>{
+      const b = document.createElement('button');
+      b.className = 'tab' + (r.key===activeRange?' active':'');
+      b.textContent = r.label;
+      b.onclick = ()=>{ activeRange = r.key; renderTabs(); computeAndRenderPerformance(); };
+      wrap.appendChild(b);
+    });
+  }
+
+  let donutChart = null;
+  async function renderAll(){
+    if(positions.length === 0){
+      $('emptyState').style.display = 'block';
+      $('weightSection').style.display = 'none';
+      $('holdingsSection').style.display = 'none';
+      $('totalValue').textContent = '— €';
+      $('perfValue').textContent = '—';
+      $('perfLabel').textContent = 'añade tu primera posición';
+      return;
+    }
+    $('emptyState').style.display = 'none';
+    $('weightSection').style.display = 'block';
+    $('holdingsSection').style.display = 'block';
+
+    const values = [];
+    for(const pos of positions){
+      let v = 0, err = false;
+      try{ v = await valueEURNow(pos); }catch(e){ err = true; }
+      values.push({pos, value: v||0, err});
+    }
+    const total = values.reduce((s,v)=>s+v.value,0);
+    $('totalValue').textContent = fmtEUR(total);
+
+    // Weight donut + legend
+    const sorted = [...values].sort((a,b)=>b.value-a.value);
+    const colors = ['#C9A227','#4FD1AE','#E8735F','#7DA6E0','#B98BD6','#6FBF73','#D9A05B','#8B9099'];
+    const legend = $('legend'); legend.innerHTML = '';
+    sorted.forEach((v,i)=>{
+      const pct = total>0 ? (v.value/total*100) : 0;
+      const row = document.createElement('div'); row.className='legend-row';
+      row.innerHTML = `<span class="legend-dot" style="background:${colors[i%colors.length]}"></span>
+        <span class="legend-name">${v.pos.ticker}</span>
+        <span class="legend-pct mono">${pct.toFixed(1)}%</span>`;
+      legend.appendChild(row);
+    });
+    const ctx = document.getElementById('donutChart').getContext('2d');
+    if(donutChart) donutChart.destroy();
+    donutChart = new Chart(ctx, {
+      type:'doughnut',
+      data:{ labels: sorted.map(v=>v.pos.ticker),
+        datasets:[{ data: sorted.map(v=>v.value), backgroundColor: sorted.map((_,i)=>colors[i%colors.length]), borderWidth:0 }] },
+      options:{ cutout:'70%', plugins:{legend:{display:false}, tooltip:{enabled:false}}, animation:{duration:400} }
+    });
+
+    // Holdings list
+    const list = $('holdingsList'); list.innerHTML = '';
+    sorted.forEach(v=>{
+      const pos = v.pos;
+      const pct = total>0 ? (v.value/total*100) : 0;
+      const costEURApprox = pos.quantity * pos.purchasePrice; // shown in purchase currency terms as reference
+      const gainPct = pos.manualPrice != null
+        ? ((pos.manualPrice - pos.purchasePrice)/pos.purchasePrice*100)
+        : null;
+      const el = document.createElement('div');
+      el.className = 'holding';
+      el.innerHTML = `
+        <div class="h-top">
+          <div>
+            <div class="h-ticker">${pos.ticker}${pos.manualPrice!=null?'<span class="manual-tag">MANUAL</span>':''}</div>
+            <div class="h-name">${pos.name}</div>
+          </div>
+          <div class="h-value mono">${v.err ? '—' : fmtEUR(v.value)}</div>
+        </div>
+        <div class="h-sub">
+          <span class="h-qty mono">${pos.quantity} ud</span>
+          <span class="mono ${v.err?'neutral':''}">${v.err ? 'error al consultar' : pct.toFixed(1)+'% cartera'}</span>
+        </div>
+        <div class="h-weightbar" style="width:${pct}%"></div>
+      `;
+      el.onclick = ()=> openEditSheet(pos);
+      list.appendChild(el);
+    });
+
+    await computeAndRenderPerformanceFromValues(values, total);
+  }
+
+  async function computeAndRenderPerformanceFromValues(currentValues, total){
+    const startDate = rangeStartDate(activeRange);
+    let startTotal = 0, anyErr = false;
+    for(const {pos} of currentValues){
+      try{
+        const v = await valueEURAt(pos, startDate);
+        if(v != null) startTotal += v;
+      }catch(e){ anyErr = true; }
+    }
+    const diff = total - startTotal;
+    const pct = startTotal>0 ? (diff/startTotal*100) : 0;
+    const el = $('perfValue'); const lbl = $('perfLabel');
+    el.className = 'perf-value mono ' + (diff>0?'up':diff<0?'down':'neutral');
+    el.textContent = (diff>=0?'▲ ':'▼ ') + fmtEUR(Math.abs(diff)) + '  ' + fmtPct(pct);
+    lbl.textContent = activeRange + (anyErr ? ' · datos parciales' : '');
+  }
+
+  async function computeAndRenderPerformance(){
+    // recompute using cached current values quickly
+    const values = [];
+    for(const pos of positions){
+      let v = 0;
+      try{ v = await valueEURNow(pos); }catch(e){}
+      values.push({pos, value:v});
+    }
+    const total = values.reduce((s,v)=>s+v.value,0);
+    await computeAndRenderPerformanceFromValues(values, total);
+  }
+
+  // ---------- Add / Edit sheet ----------
+  let editingId = null;
+  function openAddSheet(){
+    editingId = null;
+    $('sheetTitle').textContent = 'Añadir posición';
+    $('submitBtn').textContent = 'Buscar cotización y guardar';
+    $('deleteBtn').style.display = 'none';
+    $('posForm').reset();
+    $('f_date').value = todayISO();
+    $('statusMsg').innerHTML = '';
+    openSheet();
+  }
+  function openEditSheet(pos){
+    editingId = pos.id;
+    $('sheetTitle').textContent = 'Editar posición';
+    $('submitBtn').textContent = 'Guardar cambios';
+    $('deleteBtn').style.display = 'block';
+    $('f_ticker').value = pos.ticker;
+    $('f_name').value = pos.name;
+    $('f_type').value = pos.type;
+    $('f_qty').value = pos.quantity;
+    $('f_price').value = pos.purchasePrice;
+    $('f_ccy').value = pos.currency;
+    $('f_date').value = pos.purchaseDate;
+    $('statusMsg').innerHTML = '';
+    openSheet();
+  }
+  function openSheet(){ $('overlay').classList.add('open'); $('addSheet').classList.add('open'); }
+  function closeSheet(){ $('overlay').classList.remove('open'); $('addSheet').classList.remove('open'); }
+
+  $('fabAdd').onclick = openAddSheet;
+  $('cancelBtn').onclick = closeSheet;
+  $('overlay').onclick = closeSheet;
+
+  $('deleteBtn').onclick = async ()=>{
+    if(!editingId) return;
+    positions = positions.filter(p=>p.id !== editingId);
+    await savePositions();
+    closeSheet();
+    toast('Posición eliminada');
+    renderAll();
+  };
+
+  $('posForm').onsubmit = async (e)=>{
+    e.preventDefault();
+    const status = $('statusMsg');
+    status.innerHTML = '';
+    const ticker = $('f_ticker').value.trim().toUpperCase();
+    const name = $('f_name').value.trim();
+    const type = $('f_type').value;
+    const quantity = parseFloat($('f_qty').value);
+    const purchasePrice = parseFloat($('f_price').value);
+    const currency = $('f_ccy').value;
+    const purchaseDate = $('f_date').value;
+
+    $('submitBtn').textContent = 'Consultando…';
+    $('submitBtn').disabled = true;
+
+    let manualPrice = null, manualUpdated = null;
+    try{
+      const q = await fetchYahoo(ticker);
+      if(!q.currentPrice) throw new Error('sin precio');
+      status.innerHTML = `<div class="status-msg ok">Cotización encontrada: ${q.currentPrice} ${q.currency}</div>`;
+    }catch(err){
+      manualPrice = purchasePrice;
+      manualUpdated = todayISO();
+      status.innerHTML = `<div class="status-msg err">No se encontró cotización automática para "${ticker}" (frecuente en fondos con ISIN). Se ha guardado con el precio de compra como precio manual — puedes actualizarlo luego editando la posición.</div>`;
+    }
+
+    const posData = { ticker, name, type, quantity, purchasePrice, currency, purchaseDate, manualPrice, manualUpdated };
+
+    if(editingId){
+      const idx = positions.findIndex(p=>p.id===editingId);
+      if(idx>-1){
+        // preserve manual price if it was already manual and ticker unchanged, otherwise use new fetch result
+        positions[idx] = { ...positions[idx], ...posData, id: editingId };
+      }
+    } else {
+      positions.push({ id: 'p_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), ...posData });
+    }
+
+    delete priceCache[ticker];
+    await savePositions();
+    $('submitBtn').disabled = false;
+    setTimeout(()=>{ closeSheet(); toast(editingId?'Posición actualizada':'Posición añadida'); renderAll(); }, manualPrice ? 1400 : 300);
+  };
+
+  $('refreshBtn').onclick = async ()=>{
+    priceCache = {}; fxCache = {};
+    $('refreshBtn').classList.add('spinning');
+    await renderAll();
+    $('refreshBtn').classList.remove('spinning');
+    toast('Cotizaciones actualizadas');
+  };
+
+  // ---------- Init ----------
+  (async function init(){
+    renderTabs();
+    await loadPositions();
+    await renderAll();
+  })();
+
+})();
+</script>
+</body>
+</html>
