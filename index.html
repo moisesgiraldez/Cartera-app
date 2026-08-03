@@ -62,13 +62,13 @@
   .empty h3{color:var(--text); font-family:'Space Grotesk',sans-serif; font-weight:600; margin-bottom:6px;}
   .empty p{font-size:14px; line-height:1.5;}
 
-  .weight-wrap{display:flex; gap:20px; align-items:center;}
-  .donut-holder{position:relative; width:120px; height:120px; flex:0 0 120px;}
-  .legend{flex:1; display:flex; flex-direction:column; gap:10px;}
-  .legend-row{display:flex; align-items:center; gap:8px; font-size:13px;}
-  .legend-dot{width:8px; height:8px; border-radius:50%; flex:0 0 8px;}
-  .legend-name{flex:1; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
-  .legend-pct{color:var(--text-dim); font-size:12.5px;}
+  .view-switch{display:flex; gap:8px; padding:18px 20px 0;}
+  .view-btn{flex:1; padding:10px; border-radius:10px; font-size:13px; font-weight:600; text-align:center;
+    background:var(--bg-elevated); color:var(--text-dim); border:1px solid var(--border-soft); cursor:pointer;}
+  .view-btn.active{background:var(--gold); color:#0F1113; border-color:var(--gold);}
+
+  .bar-chart-holder{position:relative; width:100%; min-height:140px;}
+  .tir-helper{font-size:12.5px; color:var(--text-faint); line-height:1.5; margin:-6px 0 14px;}
 
   .holding{background:var(--bg-elevated); border:1px solid var(--border-soft); border-radius:var(--radius);
     padding:14px 16px; margin-bottom:10px; cursor:pointer; position:relative; overflow:hidden;}
@@ -146,17 +146,25 @@
   <div class="tabs" id="tabs"></div>
 </header>
 
+<div class="view-switch" id="viewSwitch" style="display:none;">
+  <button class="view-btn active" data-view="cartera">Cartera</button>
+  <button class="view-btn" data-view="tir">TIR</button>
+</div>
+
 <section id="weightSection" style="display:none;">
   <div class="section-title">Peso por activo</div>
-  <div class="weight-wrap">
-    <div class="donut-holder"><canvas id="donutChart"></canvas></div>
-    <div class="legend" id="legend"></div>
-  </div>
+  <div class="bar-chart-holder"><canvas id="weightChart"></canvas></div>
 </section>
 
 <section id="holdingsSection" style="display:none;">
   <div class="section-title">Posiciones</div>
   <div id="holdingsList"></div>
+</section>
+
+<section id="tirSection" style="display:none;">
+  <div class="section-title">TIR anualizada por activo</div>
+  <p class="tir-helper">Rentabilidad anualizada (XIRR) por activo, agrupando todas sus compras según fecha e importe de cada una, comparadas con el valor actual.</p>
+  <div id="tirList"></div>
 </section>
 
 <div id="emptyState" class="empty">
@@ -361,6 +369,64 @@
     return pos.quantity * price * fx;
   }
 
+  // ---------- Aggregation by ticker (avoids duplicate rows when there are multiple purchase lots) ----------
+  function aggregateByTicker(values){
+    const map = new Map();
+    for(const v of values){
+      const key = v.pos.ticker;
+      if(!map.has(key)) map.set(key, { ticker:key, name:v.pos.name, type:v.pos.type, value:0, err:false, lots:[] });
+      const g = map.get(key);
+      g.value += (v.value || 0);
+      if(v.err) g.err = true;
+      g.lots.push(v.pos);
+    }
+    return Array.from(map.values());
+  }
+
+  // ---------- XIRR (TIR anualizada) ----------
+  function xirr(cashflows){
+    const cfs = cashflows.slice().sort((a,b)=>a.date-b.date);
+    const t0 = cfs[0].date.getTime();
+    const yrs = cf => (cf.date.getTime()-t0)/(365*24*3600*1000);
+    function npv(r){ return cfs.reduce((s,cf)=> s + cf.amount/Math.pow(1+r, yrs(cf)), 0); }
+    function dnpv(r){ return cfs.reduce((s,cf)=> s - yrs(cf)*cf.amount/Math.pow(1+r, yrs(cf)+1), 0); }
+    let r = 0.15, converged = false;
+    for(let i=0;i<60;i++){
+      const f = npv(r), df = dnpv(r);
+      if(Math.abs(df) < 1e-9) break;
+      let nr = r - f/df;
+      if(nr <= -0.999999) nr = -0.999999;
+      if(Math.abs(nr-r) < 1e-8){ r = nr; converged = true; break; }
+      r = nr;
+      if(!isFinite(r)) break;
+    }
+    if(!converged || !isFinite(r) || Math.abs(npv(r)) > Math.abs(cfs[0].amount)*0.01){
+      // fallback: bisection, robust even if Newton diverges
+      let lo=-0.999, hi=50, flo=npv(lo), fhi=npv(hi);
+      if(flo*fhi <= 0){
+        for(let i=0;i<200;i++){
+          const mid=(lo+hi)/2, fm=npv(mid);
+          if(Math.abs(fm) < Math.abs(cfs[0].amount)*0.0001){ r=mid; break; }
+          if(flo*fm<0){ hi=mid; fhi=fm; } else { lo=mid; flo=fm; }
+          r=(lo+hi)/2;
+        }
+      } else {
+        r = NaN;
+      }
+    }
+    return isFinite(r) ? r*100 : null;
+  }
+
+  async function computeTIR(item){
+    const cashflows = [];
+    for(const lot of item.lots){
+      const fx = await fetchFX(lot.currency, lot.purchaseDate);
+      cashflows.push({ date: new Date(lot.purchaseDate+'T12:00:00Z'), amount: -(lot.quantity*lot.purchasePrice*fx) });
+    }
+    cashflows.push({ date: new Date(), amount: item.value });
+    return xirr(cashflows);
+  }
+
   function rangeStartDate(rangeKey){
     if(rangeKey === 'YTD'){
       const y = new Date().getFullYear();
@@ -382,20 +448,91 @@
     });
   }
 
-  let donutChart = null;
+  let weightChartInstance = null;
+  let currentView = 'cartera';
+
+  function renderWeightChart(aggregated, total){
+    const holder = document.getElementById('weightChart').parentElement;
+    holder.style.height = Math.max(140, aggregated.length*34) + 'px';
+    const ctx = document.getElementById('weightChart').getContext('2d');
+    if(weightChartInstance) weightChartInstance.destroy();
+    const labels = aggregated.map(a=>a.ticker);
+    const data = aggregated.map(a=> total>0 ? (a.value/total*100) : 0);
+    weightChartInstance = new Chart(ctx, {
+      type:'bar',
+      data:{ labels, datasets:[{ data, backgroundColor:'#C9A227', borderRadius:4, barThickness:16, maxBarThickness:18 }] },
+      options:{
+        indexAxis:'y',
+        plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label: c => c.parsed.x.toFixed(1)+'%' } } },
+        scales:{
+          x:{ grid:{color:'#1C2024'}, ticks:{color:'#8B9099', font:{size:10}, callback:v=>v+'%'} },
+          y:{ grid:{display:false}, ticks:{color:'#EDEBE6', font:{family:'IBM Plex Mono', size:11}} }
+        },
+        animation:{duration:350}
+      }
+    });
+  }
+
+  async function renderTIRView(aggregated){
+    const list = $('tirList');
+    list.innerHTML = '<p class="tir-helper">Calculando TIR…</p>';
+    const rows = [];
+    for(const item of aggregated){
+      let tir = null;
+      try{ tir = await computeTIR(item); }catch(e){}
+      rows.push({...item, tir});
+    }
+    rows.sort((a,b)=> (b.tir==null?-999:b.tir) - (a.tir==null?-999:a.tir));
+    list.innerHTML = '';
+    rows.forEach(r=>{
+      const tirDisplay = r.tir==null ? '—' : (r.tir>=0?'+':'') + r.tir.toFixed(1)+'%';
+      const cls = r.tir==null ? 'neutral' : (r.tir>=0?'up':'down');
+      const el = document.createElement('div');
+      el.className = 'holding';
+      el.style.cursor = 'default';
+      el.innerHTML = `
+        <div class="h-top">
+          <div>
+            <div class="h-ticker">${r.ticker}</div>
+            <div class="h-name">${r.name}${r.lots.length>1?` · ${r.lots.length} compras`:''}</div>
+          </div>
+          <div class="h-value mono ${cls}">${tirDisplay}</div>
+        </div>
+        <div class="h-sub">
+          <span class="h-qty mono">${r.err ? '—' : 'valor actual ' + fmtEUR(r.value)}</span>
+          <span class="mono neutral">TIR anualizada</span>
+        </div>
+      `;
+      list.appendChild(el);
+    });
+  }
+
+  function applyViewVisibility(hasPositions){
+    $('viewSwitch').style.display = hasPositions ? 'flex' : 'none';
+    $('weightSection').style.display = (hasPositions && currentView==='cartera') ? 'block' : 'none';
+    $('holdingsSection').style.display = (hasPositions && currentView==='cartera') ? 'block' : 'none';
+    $('tirSection').style.display = (hasPositions && currentView==='tir') ? 'block' : 'none';
+  }
+
+  document.querySelectorAll('.view-btn').forEach(btn=>{
+    btn.onclick = ()=>{
+      currentView = btn.dataset.view;
+      document.querySelectorAll('.view-btn').forEach(b=>b.classList.toggle('active', b===btn));
+      renderAll();
+    };
+  });
+
   async function renderAll(){
     if(positions.length === 0){
       $('emptyState').style.display = 'block';
-      $('weightSection').style.display = 'none';
-      $('holdingsSection').style.display = 'none';
+      applyViewVisibility(false);
       $('totalValue').textContent = '— €';
       $('perfValue').textContent = '—';
       $('perfLabel').textContent = 'añade tu primera posición';
       return;
     }
     $('emptyState').style.display = 'none';
-    $('weightSection').style.display = 'block';
-    $('holdingsSection').style.display = 'block';
+    applyViewVisibility(true);
 
     const values = [];
     for(const pos of positions){
@@ -406,28 +543,19 @@
     const total = values.reduce((s,v)=>s+v.value,0);
     $('totalValue').textContent = fmtEUR(total);
 
-    // Weight donut + legend
-    const sorted = [...values].sort((a,b)=>b.value-a.value);
-    const colors = ['#C9A227','#4FD1AE','#E8735F','#7DA6E0','#B98BD6','#6FBF73','#D9A05B','#8B9099'];
-    const legend = $('legend'); legend.innerHTML = '';
-    sorted.forEach((v,i)=>{
-      const pct = total>0 ? (v.value/total*100) : 0;
-      const row = document.createElement('div'); row.className='legend-row';
-      row.innerHTML = `<span class="legend-dot" style="background:${colors[i%colors.length]}"></span>
-        <span class="legend-name">${v.pos.ticker}</span>
-        <span class="legend-pct mono">${pct.toFixed(1)}%</span>`;
-      legend.appendChild(row);
-    });
-    const ctx = document.getElementById('donutChart').getContext('2d');
-    if(donutChart) donutChart.destroy();
-    donutChart = new Chart(ctx, {
-      type:'doughnut',
-      data:{ labels: sorted.map(v=>v.pos.ticker),
-        datasets:[{ data: sorted.map(v=>v.value), backgroundColor: sorted.map((_,i)=>colors[i%colors.length]), borderWidth:0 }] },
-      options:{ cutout:'70%', plugins:{legend:{display:false}, tooltip:{enabled:false}}, animation:{duration:400} }
-    });
+    const aggregated = aggregateByTicker(values).sort((a,b)=>b.value-a.value);
 
-    // Holdings list
+    if(currentView === 'tir'){
+      await renderTIRView(aggregated);
+      await computeAndRenderPerformanceFromValues(values, total);
+      return;
+    }
+
+    // Weight bar chart (aggregated by ticker, no duplicate lines per lot)
+    renderWeightChart(aggregated, total);
+
+    // Holdings list (per purchase lot, so each lot stays individually editable)
+    const sorted = [...values].sort((a,b)=>b.value-a.value);
     const list = $('holdingsList'); list.innerHTML = '';
     sorted.forEach(v=>{
       const pos = v.pos;
