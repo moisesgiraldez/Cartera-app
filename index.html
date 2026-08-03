@@ -134,9 +134,14 @@
         <span class="perf-label" id="perfLabel">selecciona horizonte</span>
       </div>
     </div>
-    <button class="refresh-btn" id="refreshBtn" title="Actualizar cotizaciones">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>
-    </button>
+    <div style="display:flex; gap:8px;">
+      <button class="refresh-btn" id="importBtn" title="Importar posiciones">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      </button>
+      <button class="refresh-btn" id="refreshBtn" title="Actualizar cotizaciones">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v6h-6"/></svg>
+      </button>
+    </div>
   </div>
   <div class="tabs" id="tabs"></div>
 </header>
@@ -217,6 +222,19 @@
   </form>
 </div>
 
+<div class="sheet-overlay" id="importOverlay"></div>
+<div class="sheet" id="importSheet">
+  <div class="sheet-handle"></div>
+  <h2>Importar posiciones</h2>
+  <p class="helper">Pega aquí el bloque de texto (formato JSON) con tus posiciones. Se añadirán a las que ya tengas — no se borra nada existente.</p>
+  <div class="field">
+    <textarea id="importText" rows="10" style="width:100%; background:var(--bg-elevated); border:1px solid var(--border); color:var(--text); border-radius:10px; padding:12px 13px; font-size:13px; font-family:'IBM Plex Mono',monospace;" placeholder='[{"ticker":"AAPL","name":"Apple Inc.","type":"accion","quantity":10,"purchasePrice":185.20,"currency":"USD","purchaseDate":"2024-03-15"}]'></textarea>
+  </div>
+  <div id="importStatus"></div>
+  <button type="button" class="btn-primary" id="importSubmitBtn">Cargar posiciones</button>
+  <button type="button" class="btn-ghost" id="importCancelBtn">Cancelar</button>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -247,15 +265,19 @@
     setTimeout(()=>t.classList.remove('show'), 2200);
   }
 
-  // ---------- Storage ----------
+  // ---------- Storage (localStorage: stays only on this device/browser) ----------
   async function loadPositions(){
     try{
-      const res = await window.storage.get('positions', false);
-      positions = res && res.value ? JSON.parse(res.value) : [];
+      const raw = localStorage.getItem('cartera_positions');
+      positions = raw ? JSON.parse(raw) : [];
     }catch(e){ positions = []; }
   }
   async function savePositions(){
-    await window.storage.set('positions', JSON.stringify(positions), false);
+    try{
+      localStorage.setItem('cartera_positions', JSON.stringify(positions));
+    }catch(e){
+      toast('Error al guardar en este dispositivo');
+    }
   }
 
   // ---------- Data fetching ----------
@@ -551,6 +573,58 @@
     await savePositions();
     $('submitBtn').disabled = false;
     setTimeout(()=>{ closeSheet(); toast(editingId?'Posición actualizada':'Posición añadida'); renderAll(); }, manualPrice ? 1400 : 300);
+  };
+
+  $('importBtn').onclick = ()=>{
+    $('importText').value = '';
+    $('importStatus').innerHTML = '';
+    $('importOverlay').classList.add('open');
+    $('importSheet').classList.add('open');
+  };
+  $('importCancelBtn').onclick = ()=>{
+    $('importOverlay').classList.remove('open');
+    $('importSheet').classList.remove('open');
+  };
+  $('importOverlay').onclick = $('importCancelBtn').onclick;
+
+  $('importSubmitBtn').onclick = async ()=>{
+    const raw = $('importText').value.trim();
+    const status = $('importStatus');
+    if(!raw){ status.innerHTML = '<div class="status-msg err">Pega primero el texto con las posiciones.</div>'; return; }
+    let arr;
+    try{
+      arr = JSON.parse(raw);
+      if(!Array.isArray(arr)) throw new Error('no es un array');
+    }catch(e){
+      status.innerHTML = '<div class="status-msg err">El texto no tiene un formato JSON válido. Revisa que empiece por [ y termine por ].</div>';
+      return;
+    }
+    let added = 0, skipped = 0;
+    for(const item of arr){
+      if(!item.ticker || !item.quantity || !item.purchasePrice || !item.purchaseDate){ skipped++; continue; }
+      positions.push({
+        id: 'p_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+        ticker: String(item.ticker).toUpperCase().trim(),
+        name: item.name || item.ticker,
+        type: item.type || 'accion',
+        quantity: parseFloat(item.quantity),
+        purchasePrice: parseFloat(item.purchasePrice),
+        currency: item.currency || 'EUR',
+        purchaseDate: item.purchaseDate,
+        manualPrice: item.manualPrice != null ? parseFloat(item.manualPrice) : null,
+        manualUpdated: item.manualPrice != null ? todayISO() : null
+      });
+      added++;
+    }
+    await savePositions();
+    priceCache = {};
+    status.innerHTML = `<div class="status-msg ok">${added} posición(es) añadidas${skipped?`, ${skipped} omitida(s) por datos incompletos`:''}.</div>`;
+    setTimeout(()=>{
+      $('importOverlay').classList.remove('open');
+      $('importSheet').classList.remove('open');
+      toast(added+' posición(es) importadas');
+      renderAll();
+    }, 1100);
   };
 
   $('refreshBtn').onclick = async ()=>{
