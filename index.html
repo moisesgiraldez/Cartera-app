@@ -289,11 +289,21 @@
   }
 
   // ---------- Data fetching ----------
+  async function fetchWithTimeout(url, ms=9000){
+    const controller = new AbortController();
+    const id = setTimeout(()=>controller.abort(), ms);
+    try{
+      return await fetch(url, {signal: controller.signal});
+    } finally {
+      clearTimeout(id);
+    }
+  }
+
   async function fetchYahoo(ticker){
     if(priceCache[ticker]) return priceCache[ticker];
     const target = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=5y`;
     const proxied = `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`;
-    const res = await fetch(proxied);
+    const res = await fetchWithTimeout(proxied, 9000);
     if(!res.ok) throw new Error('No se pudo consultar la cotización');
     const data = await res.json();
     const result = data && data.chart && data.chart.result && data.chart.result[0];
@@ -325,7 +335,7 @@
     let rate = null;
     for(const base of ['https://api.frankfurter.dev/v1/', 'https://api.frankfurter.app/']){
       try{
-        const res = await fetch(`${base}${path}?base=${ccy}&symbols=EUR`);
+        const res = await fetchWithTimeout(`${base}${path}?base=${ccy}&symbols=EUR`, 6000);
         if(!res.ok) continue;
         const data = await res.json();
         if(data && data.rates && data.rates.EUR){ rate = data.rates.EUR; break; }
@@ -334,6 +344,28 @@
     if(rate == null) rate = 1; // last-resort fallback so app doesn't crash
     fxCache[key] = rate;
     return rate;
+  }
+
+  // Warm both caches for a whole batch of positions IN PARALLEL, so refresh
+  // never has to wait on ~N sequential round-trips. Individual failures are
+  // swallowed here (Promise.allSettled) and surface later as per-position errors.
+  async function prewarmCaches(posList, includeHorizonStart){
+    const uniqueTickers = [...new Set(posList.filter(p=>p.manualPrice==null).map(p=>p.ticker))];
+    await Promise.allSettled(uniqueTickers.map(t=>fetchYahoo(t)));
+
+    const fxPairs = new Set();
+    const today = todayISO();
+    const startDate = includeHorizonStart ? rangeStartDate(activeRange) : null;
+    for(const p of posList){
+      const ccy = (priceCache[p.ticker] && priceCache[p.ticker].currency) || p.currency;
+      if(ccy === 'EUR') continue;
+      fxPairs.add(ccy+'|'+today);
+      if(startDate) fxPairs.add(ccy+'|'+startDate);
+    }
+    await Promise.allSettled(Array.from(fxPairs).map(pair=>{
+      const [ccy,date] = pair.split('|');
+      return fetchFX(ccy,date);
+    }));
   }
 
   // ---------- Valuation ----------
@@ -476,6 +508,16 @@
   async function renderTIRView(aggregated){
     const list = $('tirList');
     list.innerHTML = '<p class="tir-helper">Calculando TIR…</p>';
+    const fxPairs = new Set();
+    for(const item of aggregated){
+      for(const lot of item.lots){
+        if(lot.currency !== 'EUR') fxPairs.add(lot.currency+'|'+lot.purchaseDate);
+      }
+    }
+    await Promise.allSettled(Array.from(fxPairs).map(pair=>{
+      const [ccy,date] = pair.split('|');
+      return fetchFX(ccy,date);
+    }));
     const rows = [];
     for(const item of aggregated){
       let tir = null;
@@ -533,17 +575,29 @@
     }
     $('emptyState').style.display = 'none';
     applyViewVisibility(true);
+    $('totalValue').textContent = 'Cargando…';
+    $('perfLabel').textContent = 'consultando cotizaciones';
 
-    const values = [];
-    for(const pos of positions){
-      let v = 0, err = false;
-      try{ v = await valueEURNow(pos); }catch(e){ err = true; }
-      values.push({pos, value: v||0, err});
+    let values = [], total = 0, aggregated = [];
+    try{
+      await prewarmCaches(positions, true);
+
+      values = [];
+      for(const pos of positions){
+        let v = 0, err = false;
+        try{ v = await valueEURNow(pos); }catch(e){ err = true; }
+        values.push({pos, value: v||0, err});
+      }
+      total = values.reduce((s,v)=>s+v.value,0);
+      $('totalValue').textContent = fmtEUR(total);
+
+      aggregated = aggregateByTicker(values).sort((a,b)=>b.value-a.value);
+    }catch(e){
+      $('totalValue').textContent = 'Error';
+      $('perfLabel').textContent = 'fallo al consultar cotizaciones';
+      toast('No se pudo actualizar — revisa tu conexión e inténtalo de nuevo');
+      return;
     }
-    const total = values.reduce((s,v)=>s+v.value,0);
-    $('totalValue').textContent = fmtEUR(total);
-
-    const aggregated = aggregateByTicker(values).sort((a,b)=>b.value-a.value);
 
     if(currentView === 'tir'){
       await renderTIRView(aggregated);
@@ -758,16 +812,26 @@
   $('refreshBtn').onclick = async ()=>{
     priceCache = {}; fxCache = {};
     $('refreshBtn').classList.add('spinning');
-    await renderAll();
-    $('refreshBtn').classList.remove('spinning');
-    toast('Cotizaciones actualizadas');
+    try{
+      await renderAll();
+      toast('Cotizaciones actualizadas');
+    }catch(e){
+      toast('Error al actualizar');
+    }finally{
+      $('refreshBtn').classList.remove('spinning');
+    }
   };
 
   // ---------- Init ----------
   (async function init(){
     renderTabs();
     await loadPositions();
-    await renderAll();
+    try{
+      await renderAll();
+    }catch(e){
+      $('totalValue').textContent = 'Error';
+      toast('No se pudo cargar la cartera — desliza para reintentar con ⟳');
+    }
   })();
 
 })();
