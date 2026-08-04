@@ -7,7 +7,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.0/chart.umd.min.js"></script>
 <style>
   :root{
     --bg:#0F1113;
@@ -299,25 +299,36 @@
     }
   }
 
+  const CORS_PROXIES = [
+    u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+    u => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
+    u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`
+  ];
+
   async function fetchYahoo(ticker){
     if(priceCache[ticker]) return priceCache[ticker];
     const target = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=5y`;
-    const proxied = `https://api.allorigins.win/raw?url=${encodeURIComponent(target)}`;
-    const res = await fetchWithTimeout(proxied, 9000);
-    if(!res.ok) throw new Error('No se pudo consultar la cotización');
-    const data = await res.json();
-    const result = data && data.chart && data.chart.result && data.chart.result[0];
-    if(!result) throw new Error('Ticker no encontrado');
-    const ts = result.timestamp || [];
-    const closes = (result.indicators.quote[0] || {}).close || [];
-    const series = ts.map((t,i)=>({t:t*1000, close:closes[i]})).filter(p=>p.close!=null);
-    const obj = {
-      currency: result.meta.currency || 'USD',
-      currentPrice: result.meta.regularMarketPrice,
-      series
-    };
-    priceCache[ticker] = obj;
-    return obj;
+    let lastErr = new Error('No se pudo consultar ninguna fuente de cotizaciones');
+    for(const buildProxy of CORS_PROXIES){
+      try{
+        const res = await fetchWithTimeout(buildProxy(target), 8000);
+        if(!res.ok) throw new Error('proxy respondió HTTP '+res.status);
+        const data = await res.json();
+        const result = data && data.chart && data.chart.result && data.chart.result[0];
+        if(!result) throw new Error('ticker no encontrado');
+        const ts = result.timestamp || [];
+        const closes = (result.indicators.quote[0] || {}).close || [];
+        const series = ts.map((t,i)=>({t:t*1000, close:closes[i]})).filter(p=>p.close!=null);
+        const obj = {
+          currency: result.meta.currency || 'USD',
+          currentPrice: result.meta.regularMarketPrice,
+          series
+        };
+        priceCache[ticker] = obj;
+        return obj;
+      }catch(e){ lastErr = e; /* try next proxy */ }
+    }
+    throw lastErr;
   }
 
   function priceAtOrBefore(series, targetMs){
@@ -811,7 +822,7 @@
       await renderAll();
       toast('Cotizaciones actualizadas');
     }catch(e){
-      toast('Error al actualizar');
+      toast('Error: ' + (e && e.message ? e.message : 'desconocido'));
     }finally{
       $('refreshBtn').classList.remove('spinning');
     }
