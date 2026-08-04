@@ -578,67 +578,62 @@
     $('totalValue').textContent = 'Cargando…';
     $('perfLabel').textContent = 'consultando cotizaciones';
 
-    let values = [], total = 0, aggregated = [];
     try{
       await prewarmCaches(positions, true);
 
-      values = [];
+      const values = [];
       for(const pos of positions){
         let v = 0, err = false;
         try{ v = await valueEURNow(pos); }catch(e){ err = true; }
         values.push({pos, value: v||0, err});
       }
-      total = values.reduce((s,v)=>s+v.value,0);
+      const total = values.reduce((s,v)=>s+v.value,0);
       $('totalValue').textContent = fmtEUR(total);
 
-      aggregated = aggregateByTicker(values).sort((a,b)=>b.value-a.value);
+      const aggregated = aggregateByTicker(values).sort((a,b)=>b.value-a.value);
+
+      if(currentView === 'tir'){
+        await renderTIRView(aggregated);
+        await computeAndRenderPerformanceFromValues(values, total);
+        return;
+      }
+
+      // Weight bar chart (aggregated by ticker, no duplicate lines per lot)
+      renderWeightChart(aggregated, total);
+
+      // Holdings list (per purchase lot, so each lot stays individually editable)
+      const sorted = [...values].sort((a,b)=>b.value-a.value);
+      const list = $('holdingsList'); list.innerHTML = '';
+      sorted.forEach(v=>{
+        const pos = v.pos;
+        const pct = total>0 ? (v.value/total*100) : 0;
+        const el = document.createElement('div');
+        el.className = 'holding';
+        el.innerHTML = `
+          <div class="h-top">
+            <div>
+              <div class="h-ticker">${pos.ticker}${pos.manualPrice!=null?'<span class="manual-tag">MANUAL</span>':''}</div>
+              <div class="h-name">${pos.name}</div>
+            </div>
+            <div class="h-value mono">${v.err ? '—' : fmtEUR(v.value)}</div>
+          </div>
+          <div class="h-sub">
+            <span class="h-qty mono">${pos.quantity} ud</span>
+            <span class="mono ${v.err?'neutral':''}">${v.err ? 'error al consultar' : pct.toFixed(1)+'% cartera'}</span>
+          </div>
+          <div class="h-weightbar" style="width:${pct}%"></div>
+        `;
+        el.onclick = ()=> openEditSheet(pos);
+        list.appendChild(el);
+      });
+
+      await computeAndRenderPerformanceFromValues(values, total);
     }catch(e){
       $('totalValue').textContent = 'Error';
-      $('perfLabel').textContent = 'fallo al consultar cotizaciones';
-      toast('No se pudo actualizar — revisa tu conexión e inténtalo de nuevo');
-      return;
+      $('perfLabel').textContent = String(e && e.message ? e.message : e);
+      toast('Fallo: ' + (e && e.message ? e.message : 'error desconocido'));
+      throw e;
     }
-
-    if(currentView === 'tir'){
-      await renderTIRView(aggregated);
-      await computeAndRenderPerformanceFromValues(values, total);
-      return;
-    }
-
-    // Weight bar chart (aggregated by ticker, no duplicate lines per lot)
-    renderWeightChart(aggregated, total);
-
-    // Holdings list (per purchase lot, so each lot stays individually editable)
-    const sorted = [...values].sort((a,b)=>b.value-a.value);
-    const list = $('holdingsList'); list.innerHTML = '';
-    sorted.forEach(v=>{
-      const pos = v.pos;
-      const pct = total>0 ? (v.value/total*100) : 0;
-      const costEURApprox = pos.quantity * pos.purchasePrice; // shown in purchase currency terms as reference
-      const gainPct = pos.manualPrice != null
-        ? ((pos.manualPrice - pos.purchasePrice)/pos.purchasePrice*100)
-        : null;
-      const el = document.createElement('div');
-      el.className = 'holding';
-      el.innerHTML = `
-        <div class="h-top">
-          <div>
-            <div class="h-ticker">${pos.ticker}${pos.manualPrice!=null?'<span class="manual-tag">MANUAL</span>':''}</div>
-            <div class="h-name">${pos.name}</div>
-          </div>
-          <div class="h-value mono">${v.err ? '—' : fmtEUR(v.value)}</div>
-        </div>
-        <div class="h-sub">
-          <span class="h-qty mono">${pos.quantity} ud</span>
-          <span class="mono ${v.err?'neutral':''}">${v.err ? 'error al consultar' : pct.toFixed(1)+'% cartera'}</span>
-        </div>
-        <div class="h-weightbar" style="width:${pct}%"></div>
-      `;
-      el.onclick = ()=> openEditSheet(pos);
-      list.appendChild(el);
-    });
-
-    await computeAndRenderPerformanceFromValues(values, total);
   }
 
   async function computeAndRenderPerformanceFromValues(currentValues, total){
