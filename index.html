@@ -75,6 +75,7 @@
   .legend-name{flex:1; color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   .legend-pct{color:var(--text-dim); font-size:12.5px;}
   .tir-helper{font-size:12.5px; color:var(--text-faint); line-height:1.5; margin:-6px 0 14px;}
+  .evo-chart-holder{position:relative; width:100%; height:220px;}
 
   .holding{background:var(--bg-elevated); border:1px solid var(--border-soft); border-radius:var(--radius);
     padding:14px 16px; margin-bottom:10px; cursor:pointer; position:relative; overflow:hidden;}
@@ -159,6 +160,7 @@
 <div class="view-switch" id="viewSwitch" style="display:none;">
   <button class="view-btn active" data-view="cartera">Cartera</button>
   <button class="view-btn" data-view="tir">TIR</button>
+  <button class="view-btn" data-view="evolucion">Evolución</button>
 </div>
 
 <section id="weightSection" style="display:none;">
@@ -178,6 +180,13 @@
   <div class="section-title">TIR anualizada por activo</div>
   <p class="tir-helper">Rentabilidad anualizada (XIRR) por activo, agrupando todas sus compras según fecha e importe de cada una, comparadas con el valor actual.</p>
   <div id="tirList"></div>
+</section>
+
+<section id="evolutionSection" style="display:none;">
+  <div class="section-title">Evolución de la cartera</div>
+  <p class="tir-helper">Valor total en € a lo largo del horizonte seleccionado arriba (1D, 1S, 1M...). Se calcula con el histórico de precios ya descargado, así que no hace falta volver a consultar cotizaciones.</p>
+  <div class="evo-chart-holder"><canvas id="evolutionChart"></canvas></div>
+  <div id="evolutionNote" class="tir-helper"></div>
 </section>
 
 <div id="emptyState" class="empty">
@@ -277,6 +286,7 @@
   let valuesHidden = (localStorage.getItem('cartera_hideValues') === '1');
   let priceCache = {}; // ticker -> {meta, series:[{t,close}], currency}
   let fxCache = {}; // "USD_2024-01-01" -> rate to EUR
+  let fxSeriesCache = {}; // "USD_2024-01-01_2026-08-05" -> [{date, rate}] full daily series
 
   const $ = id => document.getElementById(id);
   const fmtEUR = n => (isFinite(n)?n:0).toLocaleString('es-ES',{style:'currency',currency:'EUR',maximumFractionDigits:2});
@@ -372,6 +382,39 @@
     if(rate == null) rate = 1; // last-resort fallback so app doesn't crash
     fxCache[key] = rate;
     return rate;
+  }
+
+  // Fetch a whole date-range of FX rates in ONE request per currency (Frankfurter
+  // supports range queries), instead of one request per sample date — much cheaper
+  // for building a historical evolution chart with many points.
+  async function fetchFXSeries(ccy, fromISO, toISO){
+    if(ccy === 'EUR') return null; // rate is always 1, no series needed
+    const key = ccy + '_' + fromISO + '_' + toISO;
+    if(fxSeriesCache[key]) return fxSeriesCache[key];
+    let series = null;
+    for(const base of ['https://api.frankfurter.dev/v1/', 'https://api.frankfurter.app/']){
+      try{
+        const res = await fetchWithTimeout(`${base}${fromISO}..${toISO}?base=${ccy}&symbols=EUR`, 9000);
+        if(!res.ok) continue;
+        const data = await res.json();
+        if(data && data.rates){
+          series = Object.entries(data.rates)
+            .map(([d,r])=>({date:d, rate:r.EUR}))
+            .filter(p=>p.rate!=null)
+            .sort((a,b)=> a.date < b.date ? -1 : 1);
+          break;
+        }
+      }catch(e){ /* try next base */ }
+    }
+    fxSeriesCache[key] = series;
+    return series;
+  }
+
+  function fxRateAtOrBefore(series, dateISO){
+    if(!series || series.length===0) return 1;
+    let chosen = null;
+    for(const p of series){ if(p.date <= dateISO) chosen = p; else break; }
+    return chosen ? chosen.rate : series[0].rate;
   }
 
   // Warm both caches for a whole batch of positions IN PARALLEL, so refresh
@@ -496,6 +539,55 @@
     return daysAgoISO(def.days);
   }
 
+  // Portfolio value history over [startISO, today], reusing the 5y price series
+  // already sitting in priceCache (no new ticker requests) plus one FX range
+  // request per currency (not one per sample date).
+  async function computeEvolutionSeries(posList, startISO, maxPoints){
+    const endISO = todayISO();
+    const startMs = new Date(startISO+'T00:00:00Z').getTime();
+    const endMs = new Date(endISO+'T00:00:00Z').getTime();
+    const totalDays = Math.max(1, Math.round((endMs-startMs)/86400000));
+    const step = Math.max(1, Math.ceil(totalDays/maxPoints));
+
+    const sampleDates = [];
+    for(let d=0; d<totalDays; d+=step){
+      sampleDates.push(new Date(startMs + d*86400000).toISOString().slice(0,10));
+    }
+    if(sampleDates[sampleDates.length-1] !== endISO) sampleDates.push(endISO);
+
+    const uniqueCcy = [...new Set(posList.map(p => (priceCache[p.ticker] && priceCache[p.ticker].currency) || p.currency))]
+      .filter(c => c !== 'EUR');
+    await Promise.allSettled(uniqueCcy.map(c => fetchFXSeries(c, startISO, endISO)));
+
+    const points = [];
+    for(const dateISO of sampleDates){
+      const dateMs = new Date(dateISO+'T12:00:00Z').getTime();
+      let total = 0;
+      for(const pos of posList){
+        const purchaseMs = new Date(pos.purchaseDate+'T12:00:00Z').getTime();
+        if(dateMs < purchaseMs) continue; // not held yet on this date
+
+        let price, ccy;
+        if(pos.manualPrice != null){
+          const lastUpdMs = pos.manualUpdated ? new Date(pos.manualUpdated+'T12:00:00Z').getTime() : Date.now();
+          const span = Math.max(lastUpdMs - purchaseMs, 1);
+          const frac = Math.min(Math.max((dateMs - purchaseMs)/span, 0), 1);
+          price = pos.purchasePrice + (pos.manualPrice - pos.purchasePrice)*frac;
+          ccy = pos.currency;
+        } else {
+          const q = priceCache[pos.ticker];
+          if(!q){ continue; } // couldn't fetch this ticker at all — excluded from history too
+          price = priceAtOrBefore(q.series, dateMs) || q.currentPrice;
+          ccy = q.currency;
+        }
+        const fx = ccy === 'EUR' ? 1 : fxRateAtOrBefore(fxSeriesCache[ccy+'_'+startISO+'_'+endISO], dateISO);
+        total += pos.quantity * price * fx;
+      }
+      points.push({date: dateISO, value: total});
+    }
+    return points;
+  }
+
   // ---------- Rendering ----------
   function renderTabs(){
     const wrap = $('tabs'); wrap.innerHTML = '';
@@ -537,6 +629,54 @@
         <span class="legend-name">${a.ticker}</span>
         <span class="legend-pct mono">${pct.toFixed(1)}%</span>`;
       legend.appendChild(row);
+    });
+  }
+
+  let evolutionChartInstance = null;
+  async function renderEvolutionView(posList){
+    const note = $('evolutionNote');
+    const holder = document.getElementById('evolutionChart').parentElement;
+    if(typeof Chart === 'undefined'){
+      holder.innerHTML = '<p class="tir-helper">No se pudo cargar la librería del gráfico (Chart.js). El resto de la app funciona con normalidad — prueba a recargar la página.</p>';
+      return;
+    }
+    if(valuesHidden){
+      note.textContent = 'Los valores absolutos están ocultos (icono del ojo). Muéstralos para ver la evolución en €.';
+      if(evolutionChartInstance){ evolutionChartInstance.destroy(); evolutionChartInstance = null; }
+      const ctxHidden = document.getElementById('evolutionChart').getContext('2d');
+      ctxHidden.clearRect(0,0,9999,9999);
+      return;
+    }
+    note.textContent = 'Calculando evolución…';
+    const startISO = rangeStartDate(activeRange);
+    const points = await computeEvolutionSeries(posList, startISO, 40);
+    note.textContent = '';
+
+    const ctx = document.getElementById('evolutionChart').getContext('2d');
+    if(evolutionChartInstance) evolutionChartInstance.destroy();
+    const labels = points.map(p=>{
+      const d = new Date(p.date+'T00:00:00Z');
+      return d.toLocaleDateString('es-ES', {day:'2-digit', month:'short'});
+    });
+    evolutionChartInstance = new Chart(ctx, {
+      type:'line',
+      data:{ labels, datasets:[{
+        data: points.map(p=>p.value),
+        borderColor:'#C9A227',
+        backgroundColor:'rgba(201,162,39,0.12)',
+        fill:true,
+        tension:0.25,
+        pointRadius:0,
+        borderWidth:2
+      }]},
+      options:{
+        plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label: c => fmtEUR(c.parsed.y) } } },
+        scales:{
+          x:{ grid:{display:false}, ticks:{color:'#8B9099', font:{size:9}, maxTicksLimit:6} },
+          y:{ grid:{color:'#1F2650'}, ticks:{color:'#8B9099', font:{size:10}, callback:v=>fmtEUR(v)} }
+        },
+        animation:{duration:350}
+      }
     });
   }
 
@@ -589,6 +729,7 @@
     $('weightSection').style.display = (hasPositions && currentView==='cartera') ? 'block' : 'none';
     $('holdingsSection').style.display = (hasPositions && currentView==='cartera') ? 'block' : 'none';
     $('tirSection').style.display = (hasPositions && currentView==='tir') ? 'block' : 'none';
+    $('evolutionSection').style.display = (hasPositions && currentView==='evolucion') ? 'block' : 'none';
   }
 
   document.querySelectorAll('.view-btn').forEach(btn=>{
@@ -629,6 +770,12 @@
 
       if(currentView === 'tir'){
         await renderTIRView(aggregated);
+        await computeAndRenderPerformanceFromValues(values, total);
+        return;
+      }
+
+      if(currentView === 'evolucion'){
+        await renderEvolutionView(positions);
         await computeAndRenderPerformanceFromValues(values, total);
         return;
       }
@@ -852,7 +999,7 @@
   };
 
   $('refreshBtn').onclick = async ()=>{
-    priceCache = {}; fxCache = {};
+    priceCache = {}; fxCache = {}; fxSeriesCache = {};
     $('refreshBtn').classList.add('spinning');
     try{
       await renderAll();
