@@ -743,7 +743,7 @@
     rows.sort((a,b)=> b.total - a.total);
     note.textContent = '';
 
-    holder.style.height = Math.max(160, rows.length*36) + 'px';
+    holder.style.height = Math.max(200, rows.length*44) + 'px';
     const ctx = document.getElementById('rendimientoChart').getContext('2d');
     if(rendimientoChartInstance) rendimientoChartInstance.destroy();
     rendimientoChartInstance = new Chart(ctx, {
@@ -767,6 +767,8 @@
       },
       options:{
         indexAxis:'y',
+        responsive:true,
+        maintainAspectRatio:false,
         plugins:{
           legend:{display:false},
           tooltip:{ callbacks:{
