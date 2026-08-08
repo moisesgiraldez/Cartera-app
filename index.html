@@ -112,6 +112,11 @@
   .evo-chart-holder{position:relative; width:100%; height:220px;}
   .rend-chart-holder{position:relative; width:100%; min-height:140px;}
   .rend-legend{display:flex; gap:16px; margin-bottom:14px; flex-wrap:wrap;}
+  .income-totals{display:flex; gap:10px; margin-bottom:16px;}
+  .income-total-item{flex:1; background:var(--bg-elevated); border:1px solid var(--border-soft); border-radius:12px;
+    padding:12px; display:flex; flex-direction:column; gap:4px;}
+  .income-total-label{font-size:10.5px; color:var(--text-faint); text-transform:uppercase; letter-spacing:.05em;}
+  .int-delete{color:var(--loss); font-size:11px; margin-left:6px;}
   .rend-legend-item{display:flex; align-items:center; gap:6px; font-size:12px; color:var(--text-dim);}
   .rend-dot{width:8px; height:8px; border-radius:2px; flex:0 0 8px;}
 
@@ -232,6 +237,10 @@
       <svg class="drawer-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="5" x2="5" y2="19"/><circle cx="6.5" cy="6.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/></svg>
       <span>TIR</span>
     </button>
+    <button class="drawer-item" data-view="dividendos">
+      <svg class="drawer-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="7" x2="12" y2="17"/><path d="M15 9.8c0-1.5-1.3-2.3-3-2.3s-3 .9-3 2.1c0 1.3 1.2 1.8 3 2.2 1.8.4 3 .9 3 2.2 0 1.2-1.3 2.1-3 2.1s-3-.8-3-2.3"/></svg>
+      <span>Dividendos &amp; intereses</span>
+    </button>
   </div>
   <div class="drawer-footer">Los datos de tu cartera viven solo en este dispositivo — nunca se comparten.</div>
 </nav>
@@ -257,8 +266,16 @@
 
 <section id="tirSection" style="display:none;">
   <div class="section-title">TIR anualizada por activo</div>
-  <p class="tir-helper">Rentabilidad anualizada (XIRR) por activo, agrupando todas sus compras según fecha e importe de cada una, comparadas con el valor actual.</p>
+  <p class="tir-helper">Rentabilidad anualizada (XIRR) por activo, agrupando todas sus compras, dividendos e intereses según su fecha e importe, comparadas con el valor actual.</p>
   <div id="tirList"></div>
+</section>
+
+<section id="dividendosSection" style="display:none;">
+  <div class="section-title">Dividendos &amp; intereses</div>
+  <p class="tir-helper">Los dividendos se descargan automáticamente desde la fecha de compra de cada activo. Los intereses por préstamo de acciones (SYEP u otros) se añaden a mano, por ticker y mes de devengo. Ambos ya se tienen en cuenta en la rentabilidad de la cartera, de cada activo y en la TIR.</p>
+  <div class="income-totals" id="incomeTotals"></div>
+  <div id="dividendosList"></div>
+  <button type="button" class="btn-ghost" id="addInterestBtn" style="margin-top:6px;">+ Añadir interés manual</button>
 </section>
 
 <section id="evolutionSection" style="display:none;">
@@ -360,6 +377,64 @@
 
 <div class="toast" id="toast"></div>
 
+<div class="sheet-overlay" id="interestOverlay"></div>
+<div class="sheet" id="interestSheet">
+  <div class="sheet-handle"></div>
+  <h2>Añadir interés manual</h2>
+  <p class="helper">Para intereses de programas de préstamo de acciones (SYEP u otros), asociados a un ticker de tu cartera.</p>
+  <div id="interestStatus"></div>
+  <form id="interestForm">
+    <div class="field">
+      <label>Ticker</label>
+      <select id="int_ticker" required></select>
+    </div>
+    <div class="row-2">
+      <div class="field">
+        <label>Importe</label>
+        <input type="number" id="int_amount" step="any" placeholder="12.50" required>
+      </div>
+      <div class="field">
+        <label>Divisa</label>
+        <select id="int_ccy">
+          <option value="EUR">EUR</option>
+          <option value="USD">USD</option>
+          <option value="GBP">GBP</option>
+          <option value="CHF">CHF</option>
+          <option value="JPY">JPY</option>
+          <option value="CAD">CAD</option>
+          <option value="AUD">AUD</option>
+          <option value="SEK">SEK</option>
+        </select>
+      </div>
+    </div>
+    <div class="row-2">
+      <div class="field">
+        <label>Mes de devengo</label>
+        <select id="int_month">
+          <option value="01">Enero</option>
+          <option value="02">Febrero</option>
+          <option value="03">Marzo</option>
+          <option value="04">Abril</option>
+          <option value="05">Mayo</option>
+          <option value="06">Junio</option>
+          <option value="07">Julio</option>
+          <option value="08">Agosto</option>
+          <option value="09">Septiembre</option>
+          <option value="10">Octubre</option>
+          <option value="11">Noviembre</option>
+          <option value="12">Diciembre</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>Año</label>
+        <input type="number" id="int_year" placeholder="2026" min="2000" max="2100" required>
+      </div>
+    </div>
+    <button type="submit" class="btn-primary">Guardar interés</button>
+    <button type="button" class="btn-ghost" id="interestCancelBtn">Cancelar</button>
+  </form>
+</div>
+
 <script>
 (function(){
   'use strict';
@@ -408,6 +483,23 @@
     }
   }
 
+  // Manual "interest" entries — income from securities-lending programs (e.g. IBKR
+  // SYEP), tied to a ticker and an accrual month/year (stored as day 01 of that month).
+  let interestEntries = [];
+  async function loadInterestEntries(){
+    try{
+      const raw = localStorage.getItem('cartera_interest');
+      interestEntries = raw ? JSON.parse(raw) : [];
+    }catch(e){ interestEntries = []; }
+  }
+  async function saveInterestEntries(){
+    try{
+      localStorage.setItem('cartera_interest', JSON.stringify(interestEntries));
+    }catch(e){
+      toast('Error al guardar en este dispositivo');
+    }
+  }
+
   // ---------- Data fetching ----------
   async function fetchWithTimeout(url, ms=9000){
     const controller = new AbortController();
@@ -427,7 +519,7 @@
 
   async function fetchYahoo(ticker){
     if(priceCache[ticker]) return priceCache[ticker];
-    const target = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=5y`;
+    const target = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=5y&events=div`;
     let lastErr = new Error('No se pudo consultar ninguna fuente de cotizaciones');
     for(const buildProxy of CORS_PROXIES){
       try{
@@ -439,10 +531,15 @@
         const ts = result.timestamp || [];
         const closes = (result.indicators.quote[0] || {}).close || [];
         const series = ts.map((t,i)=>({t:t*1000, close:closes[i]})).filter(p=>p.close!=null);
+        const rawDivs = (result.events && result.events.dividends) ? Object.values(result.events.dividends) : [];
+        const dividends = rawDivs
+          .map(d => ({ date: new Date(d.date*1000).toISOString().slice(0,10), amount: d.amount }))
+          .sort((a,b)=> a.date < b.date ? -1 : 1);
         const obj = {
           currency: result.meta.currency || 'USD',
           currentPrice: result.meta.regularMarketPrice,
-          series
+          series,
+          dividends
         };
         priceCache[ticker] = obj;
         return obj;
@@ -613,12 +710,85 @@
     return isFinite(r) ? r*100 : null;
   }
 
+  // Dividends actually distributed since each lot's purchase date, weighted by
+  // however many shares were already held on the ex-date. Reuses the dividend
+  // history fetched alongside the price series (no extra network request).
+  async function computeDividendsForItem(item, uptoISO){
+    const q = priceCache[item.ticker];
+    const divs = (q && q.dividends) || [];
+    const rows = [];
+    let totalEUR = 0;
+    for(const d of divs){
+      if(d.date > uptoISO) continue;
+      const heldQty = item.lots
+        .filter(l => l.purchaseDate <= d.date)
+        .reduce((s,l)=> s+l.quantity, 0);
+      if(heldQty <= 0) continue;
+      const fx = await fetchFX(q.currency, d.date);
+      const amountEUR = d.amount * heldQty * fx;
+      totalEUR += amountEUR;
+      rows.push({ date: d.date, perShare: d.amount, heldQty, currency: q.currency, amountEUR });
+    }
+    return { totalEUR, rows };
+  }
+
+  // Manual interest entries (securities-lending income) tied to a ticker, dated
+  // to the first of their accrual month.
+  async function computeInterestForTicker(ticker, uptoISO){
+    const entries = interestEntries.filter(e => e.ticker === ticker && (e.yearMonth+'-01') <= uptoISO);
+    const rows = [];
+    let totalEUR = 0;
+    for(const e of entries){
+      const dateISO = e.yearMonth + '-01';
+      const fx = await fetchFX(e.currency, dateISO);
+      const amountEUR = e.amount * fx;
+      totalEUR += amountEUR;
+      rows.push({ ...e, dateISO, amountEUR });
+    }
+    return { totalEUR, rows };
+  }
+
+  // Dividends + interest received within [startISO, uptoISO] for one aggregated ticker.
+  async function computeIncomeInRange(item, startISO, uptoISO){
+    const { rows: divRows } = await computeDividendsForItem(item, uptoISO);
+    const { rows: intRows } = await computeInterestForTicker(item.ticker, uptoISO);
+    let total = 0;
+    for(const r of divRows){ if(r.date >= startISO) total += r.amountEUR; }
+    for(const r of intRows){ if(r.dateISO >= startISO) total += r.amountEUR; }
+    return total;
+  }
+
+  // Pre-warm FX for every dividend/interest date across a batch of aggregated
+  // tickers, in parallel, so per-item income calculations hit a warm cache.
+  async function prewarmIncomeFX(aggregated, uptoISO){
+    const pairs = new Set();
+    for(const item of aggregated){
+      const q = priceCache[item.ticker];
+      if(q && q.dividends && q.currency !== 'EUR'){
+        for(const d of q.dividends){ if(d.date <= uptoISO) pairs.add(q.currency+'|'+d.date); }
+      }
+    }
+    for(const e of interestEntries){
+      if(e.currency === 'EUR') continue;
+      const dateISO = e.yearMonth+'-01';
+      if(dateISO <= uptoISO) pairs.add(e.currency+'|'+dateISO);
+    }
+    await Promise.allSettled(Array.from(pairs).map(p=>{
+      const [ccy,date] = p.split('|');
+      return fetchFX(ccy,date);
+    }));
+  }
+
   async function computeTIR(item){
     const cashflows = [];
     for(const lot of item.lots){
       const fx = await fetchFX(lot.currency, lot.purchaseDate);
       cashflows.push({ date: new Date(lot.purchaseDate+'T12:00:00Z'), amount: -(lot.quantity*lot.purchasePrice*fx) });
     }
+    const { rows: divRows } = await computeDividendsForItem(item, todayISO());
+    for(const r of divRows){ cashflows.push({ date: new Date(r.date+'T12:00:00Z'), amount: r.amountEUR }); }
+    const { rows: intRows } = await computeInterestForTicker(item.ticker, todayISO());
+    for(const r of intRows){ cashflows.push({ date: new Date(r.dateISO+'T12:00:00Z'), amount: r.amountEUR }); }
     cashflows.push({ date: new Date(), amount: item.value });
     return xirr(cashflows);
   }
@@ -644,9 +814,11 @@
         if(v != null) startTotal += v;
       }catch(e){ /* skip lot on error */ }
     }
-    const diff = item.value - startTotal;
+    let income = 0;
+    try{ income = await computeIncomeInRange(item, startISO, todayISO()); }catch(e){}
+    const diff = (item.value - startTotal) + income;
     const pct = startTotal > 0 ? (diff/startTotal*100) : null;
-    return { diff, pct };
+    return { diff, pct, income };
   }
 
   function rangeStartDate(rangeKey){
@@ -896,6 +1068,7 @@
       const [ccy,date] = pair.split('|');
       return fetchFX(ccy,date);
     }));
+    await prewarmIncomeFX(aggregated, todayISO());
     const rows = [];
     for(const item of aggregated){
       let tir = null;
@@ -927,11 +1100,82 @@
     });
   }
 
+  async function renderDividendosView(aggregated){
+    const list = $('dividendosList');
+    list.innerHTML = '<p class="tir-helper">Calculando dividendos…</p>';
+    await prewarmIncomeFX(aggregated, todayISO());
+
+    const rows = [];
+    let grandDiv = 0, grandInt = 0;
+    for(const item of aggregated){
+      const { totalEUR: divTotal, rows: divRows } = await computeDividendsForItem(item, todayISO());
+      const { totalEUR: intTotal, rows: intRows } = await computeInterestForTicker(item.ticker, todayISO());
+      grandDiv += divTotal; grandInt += intTotal;
+      rows.push({ ticker:item.ticker, name:item.name, divTotal, divRows, intTotal, intRows });
+    }
+    rows.sort((a,b)=> (b.divTotal+b.intTotal) - (a.divTotal+a.intTotal));
+
+    $('incomeTotals').innerHTML = `
+      <div class="income-total-item"><span class="income-total-label">Dividendos</span><span class="mono">${maskEUR(grandDiv)}</span></div>
+      <div class="income-total-item"><span class="income-total-label">Intereses</span><span class="mono">${maskEUR(grandInt)}</span></div>
+      <div class="income-total-item"><span class="income-total-label">Total</span><span class="mono up">${maskEUR(grandDiv+grandInt)}</span></div>
+    `;
+
+    list.innerHTML = '';
+    if(rows.every(r=> r.divRows.length===0 && r.intRows.length===0)){
+      list.innerHTML = '<p class="tir-helper">Todavía no hay dividendos descargados ni intereses añadidos.</p>';
+      return;
+    }
+    rows.forEach(r=>{
+      if(r.divRows.length===0 && r.intRows.length===0) return;
+      const el = document.createElement('div');
+      el.className = 'holding';
+      el.innerHTML = `
+        <div class="h-top">
+          <div>
+            <div class="h-ticker">${r.ticker}</div>
+            <div class="h-name">${r.name}</div>
+          </div>
+          <div class="h-value mono up">${maskEUR(r.divTotal + r.intTotal)}</div>
+        </div>
+        <div class="h-sub">
+          <span class="h-qty mono">Div: ${maskEUR(r.divTotal)}</span>
+          <span class="mono neutral">Int: ${maskEUR(r.intTotal)}</span>
+        </div>
+      `;
+      const sub = document.createElement('div');
+      sub.className = 'lots-sub';
+      r.divRows.forEach(dr=>{
+        const row = document.createElement('div');
+        row.className = 'lot-row';
+        row.innerHTML = `<span class="mono">Dividendo ${dr.date}</span><span class="mono up">${maskEUR(dr.amountEUR)}</span>`;
+        sub.appendChild(row);
+      });
+      r.intRows.forEach(ir=>{
+        const row = document.createElement('div');
+        row.className = 'lot-row';
+        row.innerHTML = `<span class="mono">Interés ${ir.yearMonth}</span><span class="mono up">${maskEUR(ir.amountEUR)} <span class="int-delete" data-id="${ir.id}">✕</span></span>`;
+        row.querySelector('.int-delete').onclick = async (e)=>{
+          e.stopPropagation();
+          interestEntries = interestEntries.filter(x=>x.id!==ir.id);
+          await saveInterestEntries();
+          toast('Interés eliminado');
+          renderAll();
+        };
+        sub.appendChild(row);
+      });
+      el.appendChild(sub);
+      el.onclick = ()=> sub.classList.toggle('open');
+      list.appendChild(el);
+    });
+  }
+
   const VIEW_LABELS = {
     cartera: 'Composición por activo',
     rendimiento: 'Invertido · plusvalía · total',
     evolucion: 'Evolución histórica',
-    tir: 'Rentabilidad anualizada'
+    tir: 'Rentabilidad anualizada',
+    dividendos: 'Dividendos e intereses cobrados'
   };
 
   function applyViewVisibility(hasPositions){
@@ -940,6 +1184,7 @@
     $('tirSection').style.display = (hasPositions && currentView==='tir') ? 'block' : 'none';
     $('evolutionSection').style.display = (hasPositions && currentView==='evolucion') ? 'block' : 'none';
     $('rendimientoSection').style.display = (hasPositions && currentView==='rendimiento') ? 'block' : 'none';
+    $('dividendosSection').style.display = (hasPositions && currentView==='dividendos') ? 'block' : 'none';
   }
 
   function openDrawer(){ $('drawer').classList.add('open'); $('drawerOverlay').classList.add('open'); }
@@ -951,6 +1196,48 @@
     $('holdingsChevron').classList.toggle('open', holdingsExpanded);
   };
   $('drawerOverlay').onclick = closeDrawer;
+
+  function openInterestSheet(){
+    const sel = $('int_ticker');
+    const uniqueTickers = [...new Set(positions.map(p=>p.ticker))].sort();
+    sel.innerHTML = uniqueTickers.map(t=>`<option value="${t}">${t}</option>`).join('');
+    $('int_amount').value = '';
+    const now = new Date();
+    $('int_month').value = String(now.getMonth()+1).padStart(2,'0');
+    $('int_year').value = now.getFullYear();
+    $('interestStatus').innerHTML = '';
+    $('interestOverlay').classList.add('open');
+    $('interestSheet').classList.add('open');
+  }
+  function closeInterestSheet(){
+    $('interestOverlay').classList.remove('open');
+    $('interestSheet').classList.remove('open');
+  }
+  $('addInterestBtn').onclick = openInterestSheet;
+  $('interestCancelBtn').onclick = closeInterestSheet;
+  $('interestOverlay').onclick = closeInterestSheet;
+
+  $('interestForm').onsubmit = async (e)=>{
+    e.preventDefault();
+    const ticker = $('int_ticker').value;
+    const amount = parseFloat($('int_amount').value);
+    const currency = $('int_ccy').value;
+    const month = $('int_month').value;
+    const year = $('int_year').value;
+    if(!ticker || !isFinite(amount) || !year){
+      $('interestStatus').innerHTML = '<div class="status-msg err">Revisa los campos — falta el ticker, importe o año.</div>';
+      return;
+    }
+    interestEntries.push({
+      id: 'int_'+Date.now()+'_'+Math.random().toString(36).slice(2,7),
+      ticker, amount, currency,
+      yearMonth: `${year}-${month}`
+    });
+    await saveInterestEntries();
+    closeInterestSheet();
+    toast('Interés añadido');
+    renderAll();
+  };
 
   document.querySelectorAll('.drawer-item').forEach(btn=>{
     btn.onclick = ()=>{
@@ -1008,6 +1295,12 @@
         return;
       }
 
+      if(currentView === 'dividendos'){
+        await renderDividendosView(aggregated);
+        await computeAndRenderPerformanceFromValues(values, total);
+        return;
+      }
+
       // Weight bar chart (aggregated by ticker, no duplicate lines per lot)
       renderWeightChart(aggregated, total);
 
@@ -1016,6 +1309,7 @@
       // default; tapping a multi-lot ticker reveals its individual purchases so they
       // stay individually editable.
       const startISO = rangeStartDate(activeRange);
+      await prewarmIncomeFX(aggregated, todayISO());
       const list = $('holdingsList'); list.innerHTML = '';
       $('holdingsSummary').textContent = `${aggregated.length} activos`;
 
@@ -1088,12 +1382,20 @@
         if(v != null) startTotal += v;
       }catch(e){ anyErr = true; }
     }
-    const diff = total - startTotal;
+    let income = 0;
+    try{
+      const aggregatedForIncome = aggregateByTicker(currentValues);
+      await prewarmIncomeFX(aggregatedForIncome, todayISO());
+      for(const item of aggregatedForIncome){
+        income += await computeIncomeInRange(item, startDate, todayISO());
+      }
+    }catch(e){ /* income optional — never block the headline % on this */ }
+    const diff = (total - startTotal) + income;
     const pct = startTotal>0 ? (diff/startTotal*100) : 0;
     const el = $('perfValue'); const lbl = $('perfLabel');
     el.className = 'perf-value mono ' + (diff>0?'up':diff<0?'down':'neutral');
     el.textContent = (valuesHidden ? '' : (diff>=0?'▲ ':'▼ ') + fmtEUR(Math.abs(diff)) + '  ') + (valuesHidden ? (diff>=0?'▲ ':'▼ ') : '') + fmtPct(pct);
-    lbl.textContent = activeRange + (anyErr ? ' · datos parciales' : '');
+    lbl.textContent = activeRange + (anyErr ? ' · datos parciales' : '') + (income>0 ? ' · incl. div/int' : '');
   }
 
   async function computeAndRenderPerformance(){
@@ -1276,6 +1578,7 @@
   (async function init(){
     renderTabs();
     await loadPositions();
+    await loadInterestEntries();
     try{
       await renderAll();
     }catch(e){
