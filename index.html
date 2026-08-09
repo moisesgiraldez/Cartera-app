@@ -272,7 +272,7 @@
 
 <section id="dividendosSection" style="display:none;">
   <div class="section-title">Dividendos &amp; intereses</div>
-  <p class="tir-helper">Los dividendos se descargan automáticamente desde la fecha de compra de cada activo. Los intereses por préstamo de acciones (SYEP u otros) se añaden a mano, por ticker y mes de devengo. Ambos ya se tienen en cuenta en la rentabilidad de la cartera, de cada activo y en la TIR.</p>
+  <p class="tir-helper">Los importes de abajo corresponden al horizonte seleccionado arriba (cambia de pestaña de fecha para ver otros periodos). La TIR de cada activo, en cambio, siempre usa el histórico completo de dividendos e intereses desde la compra.</p>
   <div class="income-totals" id="incomeTotals"></div>
   <div id="dividendosList"></div>
   <button type="button" class="btn-ghost" id="addInterestBtn" style="margin-top:6px;">+ Añadir interés manual</button>
@@ -886,7 +886,7 @@
       const b = document.createElement('button');
       b.className = 'tab' + (r.key===activeRange?' active':'');
       b.textContent = r.label;
-      b.onclick = ()=>{ activeRange = r.key; renderTabs(); computeAndRenderPerformance(); };
+      b.onclick = ()=>{ activeRange = r.key; renderTabs(); renderAll(); };
       wrap.appendChild(b);
     });
   }
@@ -1105,25 +1105,32 @@
     list.innerHTML = '<p class="tir-helper">Calculando dividendos…</p>';
     await prewarmIncomeFX(aggregated, todayISO());
 
+    const startISO = rangeStartDate(activeRange);
+    const endISO = todayISO();
+
     const rows = [];
     let grandDiv = 0, grandInt = 0;
     for(const item of aggregated){
-      const { totalEUR: divTotal, rows: divRows } = await computeDividendsForItem(item, todayISO());
-      const { totalEUR: intTotal, rows: intRows } = await computeInterestForTicker(item.ticker, todayISO());
+      const { rows: allDivRows } = await computeDividendsForItem(item, endISO);
+      const { rows: allIntRows } = await computeInterestForTicker(item.ticker, endISO);
+      const divRows = allDivRows.filter(r => r.date >= startISO);
+      const intRows = allIntRows.filter(r => r.dateISO >= startISO);
+      const divTotal = divRows.reduce((s,r)=>s+r.amountEUR, 0);
+      const intTotal = intRows.reduce((s,r)=>s+r.amountEUR, 0);
       grandDiv += divTotal; grandInt += intTotal;
       rows.push({ ticker:item.ticker, name:item.name, divTotal, divRows, intTotal, intRows });
     }
     rows.sort((a,b)=> (b.divTotal+b.intTotal) - (a.divTotal+a.intTotal));
 
     $('incomeTotals').innerHTML = `
-      <div class="income-total-item"><span class="income-total-label">Dividendos</span><span class="mono">${maskEUR(grandDiv)}</span></div>
-      <div class="income-total-item"><span class="income-total-label">Intereses</span><span class="mono">${maskEUR(grandInt)}</span></div>
-      <div class="income-total-item"><span class="income-total-label">Total</span><span class="mono up">${maskEUR(grandDiv+grandInt)}</span></div>
+      <div class="income-total-item"><span class="income-total-label">Dividendos · ${activeRange}</span><span class="mono">${maskEUR(grandDiv)}</span></div>
+      <div class="income-total-item"><span class="income-total-label">Intereses · ${activeRange}</span><span class="mono">${maskEUR(grandInt)}</span></div>
+      <div class="income-total-item"><span class="income-total-label">Total · ${activeRange}</span><span class="mono up">${maskEUR(grandDiv+grandInt)}</span></div>
     `;
 
     list.innerHTML = '';
     if(rows.every(r=> r.divRows.length===0 && r.intRows.length===0)){
-      list.innerHTML = '<p class="tir-helper">Todavía no hay dividendos descargados ni intereses añadidos.</p>';
+      list.innerHTML = `<p class="tir-helper">Sin dividendos ni intereses cobrados en el horizonte ${activeRange}. Cambia de horizonte arriba para ver otros periodos, o añade un interés manual.</p>`;
       return;
     }
     rows.forEach(r=>{
@@ -1140,7 +1147,7 @@
         </div>
         <div class="h-sub">
           <span class="h-qty mono">Div: ${maskEUR(r.divTotal)}</span>
-          <span class="mono neutral">Int: ${maskEUR(r.intTotal)}</span>
+          <span class="mono neutral">Int: ${maskEUR(r.intTotal)} · ${activeRange}</span>
         </div>
       `;
       const sub = document.createElement('div');
