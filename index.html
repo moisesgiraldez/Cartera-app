@@ -455,6 +455,9 @@
   let priceCache = {}; // ticker -> {meta, series:[{t,close}], currency}
   let fxCache = {}; // "USD_2024-01-01" -> rate to EUR
   let fxSeriesCache = {}; // "USD_2024-01-01_2026-08-05" -> [{date, rate}] full daily series
+  let tickerFailCache = {}; // ticker -> Error, so a blocked ticker fails FAST on every
+                             // subsequent lot instead of redundantly retrying all proxies
+                             // with full timeouts for each purchase of the same ticker.
 
   const $ = id => document.getElementById(id);
   const fmtEUR = n => (isFinite(n)?n:0).toLocaleString('es-ES',{style:'currency',currency:'EUR',maximumFractionDigits:2});
@@ -512,13 +515,14 @@
   }
 
   const CORS_PROXIES = [
+    u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`,
     u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
-    u => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
-    u => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(u)}`
+    u => `https://corsproxy.io/?url=${encodeURIComponent(u)}`
   ];
 
   async function fetchYahoo(ticker){
     if(priceCache[ticker]) return priceCache[ticker];
+    if(tickerFailCache[ticker]) throw tickerFailCache[ticker]; // already known-bad this session — fail fast
     const target = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=5y&events=div`;
     let lastErr = new Error('No se pudo consultar ninguna fuente de cotizaciones');
     for(const buildProxy of CORS_PROXIES){
@@ -545,6 +549,7 @@
         return obj;
       }catch(e){ lastErr = e; /* try next proxy */ }
     }
+    tickerFailCache[ticker] = lastErr;
     throw lastErr;
   }
 
@@ -610,9 +615,23 @@
   // Warm both caches for a whole batch of positions IN PARALLEL, so refresh
   // never has to wait on ~N sequential round-trips. Individual failures are
   // swallowed here (Promise.allSettled) and surface later as per-position errors.
+  // Runs async work with at most `limit` in flight at once — avoids firing 20-30
+  // simultaneous requests at a free CORS proxy that only allows ~20/min.
+  async function runWithConcurrency(items, worker, limit){
+    let idx = 0;
+    async function lane(){
+      while(idx < items.length){
+        const i = idx++;
+        try{ await worker(items[i]); }catch(e){ /* individual failures handled by caller */ }
+      }
+    }
+    const lanes = Array.from({length: Math.min(limit, items.length)}, lane);
+    await Promise.all(lanes);
+  }
+
   async function prewarmCaches(posList, includeHorizonStart){
     const uniqueTickers = [...new Set(posList.filter(p=>p.manualPrice==null).map(p=>p.ticker))];
-    await Promise.allSettled(uniqueTickers.map(t=>fetchYahoo(t)));
+    await runWithConcurrency(uniqueTickers, t=>fetchYahoo(t), 5);
 
     const fxPairs = new Set();
     const today = todayISO();
@@ -1569,7 +1588,7 @@
   };
 
   $('refreshBtn').onclick = async ()=>{
-    priceCache = {}; fxCache = {}; fxSeriesCache = {};
+    priceCache = {}; fxCache = {}; fxSeriesCache = {}; tickerFailCache = {};
     $('refreshBtn').classList.add('spinning');
     try{
       await renderAll();
