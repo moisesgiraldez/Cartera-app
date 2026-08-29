@@ -1275,6 +1275,13 @@
     };
   });
 
+  function withTimeout(promise, ms, message){
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => setTimeout(()=>reject(new Error(message)), ms))
+    ]);
+  }
+
   async function renderAll(){
     if(positions.length === 0){
       $('emptyState').style.display = 'block';
@@ -1290,7 +1297,16 @@
     $('perfLabel').textContent = 'consultando cotizaciones';
 
     try{
-      await prewarmCaches(positions, true);
+      await withTimeout(renderAllInner(), 25000, 'Tiempo de espera agotado (25s) — los proxies de cotizaciones no responden. Revisa tu conexión o inténtalo más tarde.');
+    }catch(e){
+      $('totalValue').textContent = 'Error';
+      $('perfLabel').textContent = String(e && e.message ? e.message : e);
+      toast('Fallo: ' + (e && e.message ? e.message : 'error desconocido'));
+    }
+  }
+
+  async function renderAllInner(){
+    await prewarmCaches(positions, true);
 
       const values = [];
       for(const pos of positions){
@@ -1391,12 +1407,6 @@
       $('holdingsChevron').classList.toggle('open', holdingsExpanded);
 
       await computeAndRenderPerformanceFromValues(values, total);
-    }catch(e){
-      $('totalValue').textContent = 'Error';
-      $('perfLabel').textContent = String(e && e.message ? e.message : e);
-      toast('Fallo: ' + (e && e.message ? e.message : 'error desconocido'));
-      throw e;
-    }
   }
 
   async function computeAndRenderPerformanceFromValues(currentValues, total){
